@@ -52,6 +52,7 @@ const float gearRatio = 30.0;        // set per gearbox
 const float mmPerWheelRev = PI * wheelDiameterMM;
 const float mmPerMotorRev = mmPerWheelRev / gearRatio;
 const float mmPerTick = mmPerMotorRev / ticksPerRev;
+const float trackWidthMM = 120.0f; // approx wheel-to-wheel distance; adjust to your robot
 
 #define READ_ENC_A() ((digitalRead(MEA1) << 1) | digitalRead(MEA2))
 #define READ_ENC_B() ((digitalRead(MEB1) << 1) | digitalRead(MEB2))
@@ -145,6 +146,9 @@ unsigned long startMs = 0; // timestamp when GO pressed
 
 // ---------- IMU helpers ----------
 static float yawDeg = 0.0f;
+static float gyroZ_dps = 0.0f; // IMU angular velocity (deg/s)
+static float linVel_mm_s = 0.0f; // linear velocity from encoders (mm/s)
+static float angVel_deg_s = 0.0f; // angular velocity (deg/s)
 
 // basic complimentary-like yaw from gyro Z only; for simplicity
 void updateIMU(float dt){
@@ -152,8 +156,8 @@ void updateIMU(float dt){
 	int16_t gx, gy, gz; // raw gyro
 	// Electronic Cats MPU6050: getRotation returns deg/s scaled by 131 if raw; here use getRotation
 	imu.getRotation(&gx, &gy, &gz);
-	float gz_dps = gz / 131.0f; // approx for ±250 dps range
-	yawDeg += gz_dps * dt; // integrate
+	gyroZ_dps = gz / 131.0f; // approx for ±250 dps range
+	yawDeg += gyroZ_dps * dt; // integrate
 	if (yawDeg > 180) yawDeg -= 360; else if (yawDeg < -180) yawDeg += 360;
 }
 
@@ -235,6 +239,24 @@ void loop() {
 	long dB = encoderCountB - startCountB;
 	float elapsedSec = driving ? (millis() - startMs) / 1000.0f : 0.0f;
 
+	// Estimate velocities
+	static long prevCountA = 0, prevCountB = 0;
+	long dTicksA_dt = (encoderCountA - prevCountA);
+	long dTicksB_dt = (encoderCountB - prevCountB);
+	prevCountA = encoderCountA;
+	prevCountB = encoderCountB;
+	if (dt > 0) {
+		float vA = (dTicksA_dt * mmPerTick) / dt; // mm/s
+		float vB = (dTicksB_dt * mmPerTick) / dt; // mm/s
+		linVel_mm_s = 0.5f * (vA + vB);
+		// Use IMU for angular velocity if available; else estimate from encoders
+		if (imuOk) angVel_deg_s = gyroZ_dps;
+		else {
+			float omega_rad_s = (vB - vA) / trackWidthMM; // rad/s
+			angVel_deg_s = omega_rad_s * (180.0f / PI);
+		}
+	}
+
 	if (driving){
 		// Use constant user-commanded speed; time only governs stop
 		float baseTarget = -baseMaxPwm; // negative = forward
@@ -285,6 +307,7 @@ void loop() {
 	display.printf("Time:%.1fs\n", elapsedSec);
 	display.printf("Yaw:%.1f deg IMU:%d\n", yawDeg, imuOk);
 	display.printf("A:%d B:%d\n", motorPowerA, motorPowerB);
+	display.printf("V:%.0f mm/s  w:%.1f deg/s\n", linVel_mm_s, angVel_deg_s);
 	display.display();
 
 	// Loop rate ~50Hz
