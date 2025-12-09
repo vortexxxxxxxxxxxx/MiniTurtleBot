@@ -18,10 +18,14 @@ const int pwmB1_Ch = 2;
 const int pwmB2_Ch = 3;
 
 // ---------- Motion Parameters ----------
-const int FORWARD_POWER = 550;     // tune for your robot
-const int TURN_POWER = 500;        // differential turning power
-const int BURST_MS = 900;          // forward burst duration
-const int TURN_RIGHT_MS = 250;     // approx 90° (tune)
+// Per-wheel forward power for straight segments (tune individually)
+const int FORWARD_POWER_A = 500;   // RIGHT Motor forward power (straight)
+const int FORWARD_POWER_B = 600;   // LEFT Motor forward power (straight) 
+// Per-wheel turn power for right turns (A forward, B backward)
+const int TURN_POWER_A = 500;      // Motor A power during right turn (forward)
+const int TURN_POWER_B = 520;      // Motor B power during right turn (reverse)
+const int BURST_MS = 1350;          // forward burst duration
+const int TURN_RIGHT_MS = 260;     // approx 90° (tune)
 const int STOP_MS = 250;           // stop between actions
 
 // ---------- Motor Helpers ----------
@@ -94,14 +98,14 @@ void loop() {
 				state = DONE;
 				break;
 			}
-			rampMotors(FORWARD_POWER, FORWARD_POWER);
+			rampMotors(FORWARD_POWER_A, FORWARD_POWER_B);
 			t0 = millis();
 			state = FWD;
 			break;
 
 		case FWD:
-			setMotorA(FORWARD_POWER);
-			setMotorB(FORWARD_POWER);
+			setMotorA(FORWARD_POWER_A);
+			setMotorB(FORWARD_POWER_B);
 			if (millis() - t0 >= BURST_MS) {
 				stopMotors();
 				t0 = millis();
@@ -111,16 +115,16 @@ void loop() {
 
 		case PAUSE_AFTER_FWD:
 			if (millis() - t0 >= STOP_MS) {
-				// Right turn: A forward, B backward
-				rampMotors(TURN_POWER, -TURN_POWER);
+				// Right turn: A forward, B backward (per-wheel tuning)
+				rampMotors(TURN_POWER_A, -TURN_POWER_B);
 				t0 = millis();
 				state = TURN_RIGHT;
 			}
 			break;
 
 		case TURN_RIGHT:
-			setMotorA(TURN_POWER);
-			setMotorB(-TURN_POWER);
+			setMotorA(TURN_POWER_A);
+			setMotorB(-TURN_POWER_B);
 			if (millis() - t0 >= TURN_RIGHT_MS) {
 				stopMotors();
 				t0 = millis();
