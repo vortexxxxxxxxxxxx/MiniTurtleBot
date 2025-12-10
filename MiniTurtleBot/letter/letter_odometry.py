@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import math
 import os
 import select
 import socket
@@ -147,8 +148,11 @@ class Logger(threading.Thread):
                     continue
             self._last_logged = tup
             ts = datetime.utcnow().isoformat() + "Z"
+            # Normalize heading to [-180, 180] degrees for clearer turning representation
+            theta_deg = math.degrees(pose.theta)
+            theta_deg = (theta_deg + 180.0) % 360.0 - 180.0
             with self._file_lock:
-                self._csv.writerow([ts, f"{pose.x:.6f}", f"{pose.y:.6f}", f"{(pose.theta*180.0/3.1415926535):.2f}"])
+                self._csv.writerow([ts, f"{pose.x:.6f}", f"{pose.y:.6f}", f"{theta_deg:.2f}"])
                 self._fh.flush()
 
 
@@ -177,6 +181,9 @@ class Controller:
                 self._pressed.add('up'); self.send_cmd("F1")
             elif key == keyboard.Key.down and 'down' not in self._pressed:
                 self._pressed.add('down'); self.send_cmd("B1")
+            elif key == keyboard.Key.space and 'space' not in self._pressed:
+                # Trigger 360° scan command
+                self._pressed.add('space'); self.send_cmd("S1")
 
     def on_release(self, key):
         with self._lock:
@@ -188,6 +195,8 @@ class Controller:
                 self._pressed.discard('up'); self.send_cmd("F0")
             elif key == keyboard.Key.down:
                 self._pressed.discard('down'); self.send_cmd("B0")
+            elif key == keyboard.Key.space:
+                self._pressed.discard('space')
 
 
 def main():

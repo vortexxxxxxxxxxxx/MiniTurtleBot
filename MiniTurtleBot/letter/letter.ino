@@ -103,8 +103,8 @@ void setupMotorPWM(){
 }
 
 // ---------- Wi-Fi ----------
-const char* ssid     = "TurtleBot";
-const char* password = "123";
+const char* ssid     = "SpectrumSetup-09";
+const char* password = "leaderstatue564";
 
 // ---------- UDP ----------
 WiFiUDP udp;

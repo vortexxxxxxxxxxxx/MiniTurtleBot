@@ -1,7 +1,7 @@
 import socket
 from pynput import keyboard
 
-ESP_IP = ""
+ESP_IP = "192.168.1.14"
 UDP_PORT = 5601
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -24,6 +24,10 @@ def on_press(key):
     elif key == keyboard.Key.down and 'down' not in pressed_keys:
         pressed_keys.add('down')
         send_cmd("B1")
+    elif key == keyboard.Key.space and 'space' not in pressed_keys:
+        # Trigger 360° scan (handled by heatmap firmware or extended sketch)
+        pressed_keys.add('space')
+        send_cmd("S1")
 
 def on_release(key):
     if key == keyboard.Key.left:
@@ -41,7 +45,10 @@ def on_release(key):
     elif key == keyboard.Key.esc:
         # ESC exits the program
         return False
+    elif key == keyboard.Key.space:
+        # optional: mark space released (no S0 needed)
+        pressed_keys.discard('space')
 
 with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
-    print("Use ← and → arrows to control LEDs. Press ESC to exit.")
+    print("Use arrow keys to drive; SPACE to scan; ESC to exit.")
     listener.join()
