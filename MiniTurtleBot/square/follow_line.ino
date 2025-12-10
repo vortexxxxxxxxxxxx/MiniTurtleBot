@@ -35,6 +35,61 @@ const int pwmA2_Ch = 1;
 const int pwmB1_Ch = 2;
 const int pwmB2_Ch = 3;
 
+// ---------- Encoders (for odometry) ----------
+#define MEA1 D10
+#define MEA2 D11
+#define MEB1 D12
+#define MEB2 D13
+volatile long encoderCountA = 0;
+volatile long encoderCountB = 0;
+volatile uint8_t prevStateA = 0, prevStateB = 0;
+const int ticksPerRev = 12 * 4;   // 12 ticks/ch * 4x
+const float gearRatio = 30.0f;    // adjust for your motors
+
+#define READ_ENC_A() ((digitalRead(MEA1) << 1) | digitalRead(MEA2))
+#define READ_ENC_B() ((digitalRead(MEB1) << 1) | digitalRead(MEB2))
+
+void IRAM_ATTR handleEncoderA(){
+  uint8_t s = READ_ENC_A();
+  uint8_t c = (prevStateA << 2) | s;
+  switch(c){
+    case 0b0001: case 0b0111: case 0b1110: case 0b1000: encoderCountA++; break;
+    case 0b0010: case 0b0100: case 0b1101: case 0b1011: encoderCountA--; break;
+  }
+  prevStateA = s;
+}
+void IRAM_ATTR handleEncoderB(){
+  uint8_t s = READ_ENC_B();
+  uint8_t c = (prevStateB << 2) | s;
+  switch(c){
+    case 0b0001: case 0b0111: case 0b1110: case 0b1000: encoderCountB++; break;
+    case 0b0010: case 0b0100: case 0b1101: case 0b1011: encoderCountB--; break;
+  }
+  prevStateB = s;
+}
+
+void setupEncoders(){
+  pinMode(MEA1, INPUT); pinMode(MEA2, INPUT);
+  pinMode(MEB1, INPUT); pinMode(MEB2, INPUT);
+  prevStateA = READ_ENC_A();
+  prevStateB = READ_ENC_B();
+  attachInterrupt(digitalPinToInterrupt(MEA1), handleEncoderA, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(MEA2), handleEncoderA, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(MEB1), handleEncoderB, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(MEB2), handleEncoderB, CHANGE);
+}
+
+// ---------- Robot geometry ----------
+const float wheelRadius_m = 0.0325f; // 65mm dia
+const float trackWidth_m  = 0.10f;   // distance between wheels
+const float wheelCircum_m = 2.0f * 3.1415926f * wheelRadius_m;
+// Encoder direction multipliers (set to -1 to invert if wheel direction is opposite)
+const int ENC_A_DIR = 1; // Motor A (Right)
+const int ENC_B_DIR = 1; // Motor B (Left)
+
+// ---------- Odometry state ----------
+float pose_x = 0.0f, pose_y = 0.0f, pose_theta = 0.0f; // meters, radians
+
 // ---------- IR SENSORS ----------
 #define IR_LEFT  D2   // adjust if wiring differs; must be ADC-capable pin
 #define IR_RIGHT A1   // ADC-capable
@@ -114,6 +169,8 @@ void setup(){
 
   // Motors
   setupMotorPWM();
+  // Encoders
+  setupEncoders();
 
   // Start moving forward gently
   setMotorA(-minPWM);
@@ -161,6 +218,33 @@ void loop(){
   int rawR = readIRRight();
   float aL = affinity(rawL);
   float aR = affinity(rawR);
+
+  // ---- Odometry update from encoder tick deltas (robust) ----
+  {
+    static long lastCountA = 0, lastCountB = 0;
+    long dA = encoderCountA - lastCountA;
+    long dB = encoderCountB - lastCountB;
+    lastCountA = encoderCountA;
+    lastCountB = encoderCountB;
+
+    // Convert tick deltas to wheel travel distances (meters)
+    float revA = (float)dA / (float)(ticksPerRev * gearRatio);
+    float revB = (float)dB / (float)(ticksPerRev * gearRatio);
+    float dr = (revA * wheelCircum_m) * ENC_A_DIR; // right wheel
+    float dl = (revB * wheelCircum_m) * ENC_B_DIR; // left wheel
+
+    // Deadband to avoid noise accumulation when stationary
+    if (fabsf(dr) < 1e-6f && fabsf(dl) < 1e-6f) {
+      // no movement
+    } else {
+      float dS = 0.5f * (dr + dl);
+      float dTh = (dr - dl) / trackWidth_m;
+      // Midpoint integration for better accuracy on turns
+      pose_x     += dS * cosf(pose_theta + 0.5f * dTh);
+      pose_y     += dS * sinf(pose_theta + 0.5f * dTh);
+      pose_theta += dTh;
+    }
+  }
 
   // Error: positive if left sees more black than right (needs right motor faster or left slower)
   float err = aL - aR; // range roughly [-1..1]
@@ -243,6 +327,7 @@ void loop(){
   // Motor commands and per-wheel bases
   display.printf("baseL:%d baseR:%d\n", baseL, baseR);
   display.printf("PWM A:%d B:%d\n", motorPowerA, motorPowerB);
+  display.printf("x:%.2f y:%.2f th:%.1f\n", pose_x, pose_y, pose_theta*57.2958f);
 
   // Simple directional indicator (arrow left/right based on error)
   int cx = 64, cy = 54; // near bottom center
@@ -278,29 +363,54 @@ String controlPage(){
   h += "<div class=row>PID kp <input id=kp type=number step=0.01> ki <input id=ki type=number step=0.001> kd <input id=kd type=number step=0.01></div>";
   h += "<div class=row>threshold <input id=th type=number step=10 min=0 max=4095></div>";
   h += "<div class=row>backup(ms) <input id=backup type=number step=10 min=0> recover(ms) <input id=recover type=number step=10 min=0></div>";
-  h += "<div class=row><button onclick=apply()>Apply</button> <button onclick=refresh()>Refresh</button></div>";
+  h += "<div class=row><button onclick=apply()>Apply</button> <button onclick=refresh()>Refresh</button> <button onclick=resetPose()>Reset Pose</button></div>";
+  h += "<h4>Pose</h4><div class=row><pre id=pose></pre></div>";
   h += "<pre id=stat></pre>";
-    h += "<script>let editing=false;function bindEditGuards(){document.querySelectorAll('input').forEach(el=>{el.addEventListener('focus',()=>editing=true);el.addEventListener('blur',()=>editing=false);});}\n"
-      "async function refresh(){const r=await fetch('/status');const j=await r.json();\n"
-      "if(!editing){document.getElementById('baseL').value=j.baseL;document.getElementById('baseR').value=j.baseR;\n"
-      "document.getElementById('minPWM').value=j.minPWM;document.getElementById('steerGain').value=j.steerGain;\n"
-      "document.getElementById('kp').value=j.kp;document.getElementById('ki').value=j.ki;document.getElementById('kd').value=j.kd;\n"
-      "document.getElementById('th').value=j.threshold;document.getElementById('backup').value=j.backupMs;document.getElementById('recover').value=j.recoverMs;}\n"
-      "document.getElementById('stat').textContent=JSON.stringify(j,null,2);}\n"
-       "async function apply(){const p=new URLSearchParams();\n"
-       "p.append('baseL',document.getElementById('baseL').value);\n"
-       "p.append('baseR',document.getElementById('baseR').value);\n"
-       "p.append('minPWM',document.getElementById('minPWM').value);\n"
-       "p.append('steerGain',document.getElementById('steerGain').value);\n"
-       "p.append('kp',document.getElementById('kp').value);\n"
-       "p.append('ki',document.getElementById('ki').value);\n"
-       "p.append('kd',document.getElementById('kd').value);\n"
-       "p.append('threshold',document.getElementById('th').value);\n"
-       "p.append('backupMs',document.getElementById('backup').value);\n"
-       "p.append('recoverMs',document.getElementById('recover').value);\n"
-       "await fetch('/apply',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p.toString()});refresh();}\n"
-       "function stop(){fetch('/stop');} function resume(){fetch('/resume');}\n"
-      "bindEditGuards();refresh();setInterval(refresh,1000);</script>";
+  h += "<script>\n"
+       "let editing=false;\n"
+       "function bindEditGuards(){document.querySelectorAll('input').forEach(el=>{el.addEventListener('focus',()=>editing=true);el.addEventListener('blur',()=>editing=false);});}\n"
+       "async function refresh(){\n"
+         "try{\n"
+           "const r=await fetch('/status');const j=await r.json();\n"
+           "if(!editing){\n"
+             "document.getElementById('baseL').value=j.baseL;\n"
+             "document.getElementById('baseR').value=j.baseR;\n"
+             "document.getElementById('minPWM').value=j.minPWM;\n"
+             "document.getElementById('steerGain').value=j.steerGain;\n"
+             "document.getElementById('kp').value=j.kp;\n"
+             "document.getElementById('ki').value=j.ki;\n"
+             "document.getElementById('kd').value=j.kd;\n"
+             "document.getElementById('th').value=j.threshold;\n"
+             "document.getElementById('backup').value=j.backupMs;\n"
+             "document.getElementById('recover').value=j.recoverMs;\n"
+           "}\n"
+           "document.getElementById('stat').textContent=JSON.stringify(j,null,2);\n"
+           "const pr=await fetch('/pose');const pj=await pr.json();\n"
+           "document.getElementById('pose').textContent=JSON.stringify(pj,null,2);\n"
+         "}catch(e){\n"
+           "document.getElementById('stat').textContent='Error: '+e;\n"
+         "}\n"
+       "}\n"
+       "async function apply(){\n"
+         "const p=new URLSearchParams();\n"
+         "p.append('baseL',document.getElementById('baseL').value);\n"
+         "p.append('baseR',document.getElementById('baseR').value);\n"
+         "p.append('minPWM',document.getElementById('minPWM').value);\n"
+         "p.append('steerGain',document.getElementById('steerGain').value);\n"
+         "p.append('kp',document.getElementById('kp').value);\n"
+         "p.append('ki',document.getElementById('ki').value);\n"
+         "p.append('kd',document.getElementById('kd').value);\n"
+         "p.append('threshold',document.getElementById('th').value);\n"
+         "p.append('backupMs',document.getElementById('backup').value);\n"
+         "p.append('recoverMs',document.getElementById('recover').value);\n"
+         "await fetch('/apply',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p.toString()});\n"
+         "refresh();\n"
+       "}\n"
+       "function stop(){fetch('/stop');}\n"
+       "function resume(){fetch('/resume');}\n"
+       "function resetPose(){fetch('/reset_pose');}\n"
+       "bindEditGuards();refresh();setInterval(refresh,1000);\n"
+     "</script>";
   h += "</body></html>";
   return h;
 }
@@ -322,6 +432,15 @@ void setupWiFiPanel(){
       "{\"baseL\":%d,\"baseR\":%d,\"minPWM\":%d,\"steerGain\":%.3f,\"kp\":%.3f,\"ki\":%.4f,\"kd\":%.3f,\"threshold\":%d,\"backupMs\":%lu,\"recoverMs\":%lu}",
       basePWMLeft, basePWMRight, minPWM, steerGain, steerPid.kp, steerPid.ki, steerPid.kd, lineThreshold, (unsigned long)backupDurationMs, (unsigned long)recoverDurationMs);
     server.send(200, "application/json", String(buf));
+  });
+  server.on("/pose", HTTP_GET, [](){
+    char buf[256];
+    snprintf(buf, sizeof(buf), "{\"x_m\":%.3f,\"y_m\":%.3f,\"theta_deg\":%.2f}", pose_x, pose_y, pose_theta*57.2958f);
+    server.send(200, "application/json", String(buf));
+  });
+  server.on("/reset_pose", HTTP_GET, [](){
+    pose_x = 0.0f; pose_y = 0.0f; pose_theta = 0.0f;
+    server.send(200, "text/plain", "OK");
   });
   server.on("/apply", HTTP_POST, [](){
     if (server.hasArg("baseL")) basePWMLeft = constrain(server.arg("baseL").toInt(), 0, 1023);
