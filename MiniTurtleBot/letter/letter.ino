@@ -35,6 +35,10 @@ volatile uint8_t prevStateA = 0, prevStateB = 0;
 const int ticksPerRev = 12 * 4;
 const float gearRatio = 30.0;
 
+// ---------- Base PWM tuning ----------
+int basePWM_A = 200;  // default base PWM for motor A
+int basePWM_B = 250;  // default base PWM for motor B
+
 #define READ_ENC_A() ((digitalRead(MEA1) << 1) | digitalRead(MEA2))
 #define READ_ENC_B() ((digitalRead(MEB1) << 1) | digitalRead(MEB2))
 
@@ -187,41 +191,53 @@ void loop() {
     display.println("Received:");
     display.println(incoming);
 
-    // LED control
-    if (strcmp(incoming, "L1") == 0) {
-      setMotorA(200); 
-      setMotorB(-200);
+    // Motor control and tuning
+    // Tuning commands:
+    //   "PAxxx" sets basePWM_A to xxx (0-1023)
+    //   "PBxxx" sets basePWM_B to xxx (0-1023)
+    // Movement commands:
+    //   L1/R1/F1/B1 use basePWM_A/basePWM_B; X0 stops both
+    if (incoming[0] == 'P' && (incoming[1] == 'A' || incoming[1] == 'B')) {
+      int val = atoi(incoming + 2);
+      val = constrain(val, 0, 1023);
+      if (incoming[1] == 'A') basePWM_A = val;
+      else basePWM_B = val;
+      display.println("PWM updated");
+      display.print("A:"); display.println(basePWM_A);
+      display.print("B:"); display.println(basePWM_B);
+    }
+    else if (strcmp(incoming, "L1") == 0) {
+      setMotorA(basePWM_A);
+      setMotorB(-basePWM_B);
     }
     else if (strcmp(incoming, "L0") == 0) {
-    setMotorA(1); 
-    setMotorB(1);      
+      setMotorA(0);
+      setMotorB(0);
     }
-
     else if (strcmp(incoming, "R1") == 0){
-      setMotorA(-200); 
-      setMotorB(200);
-    } 
-    else if (strcmp(incoming, "R0") == 0){
-      setMotorA(1); 
-      setMotorB(1);
+      setMotorA(-basePWM_A);
+      setMotorB(basePWM_B);
     }
-     
+    else if (strcmp(incoming, "R0") == 0){
+      setMotorA(0);
+      setMotorB(0);
+    }
     else if (strcmp(incoming, "F1") == 0){
-      setMotorA(200); 
-      setMotorB(200);
-    } 
+      setMotorA(basePWM_A);
+      setMotorB(basePWM_B);
+    }
     else if (strcmp(incoming, "F0") == 0){
-      setMotorA(1); 
-      setMotorB(1);
-    } 
+      setMotorA(0);
+      setMotorB(0);
+    }
     else if (strcmp(incoming, "B1") == 0){
-      setMotorA(-200); 
-      setMotorB(-200);
-    } 
+      setMotorA(-basePWM_A);
+      setMotorB(-basePWM_B);
+    }
     else if (strcmp(incoming, "B0") == 0){
-      setMotorA(1); 
-      setMotorB(1);
-    } 
+      setMotorA(0);
+      setMotorB(0);
+    }
 
     display.display();
   }
